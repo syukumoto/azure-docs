@@ -158,6 +158,39 @@ The steps you follow for your project depends on whether you're using [Entity Fr
     
     This code uses [Azure.Identity.DefaultAzureCredential](/dotnet/api/azure.identity.defaultazurecredential) to get a useable token for SQL Database from Azure Active Directory and then adds it to the database connection. While you can customize `DefaultAzureCredential`, by default it's already very versatile. When running in App Service, it uses app's system-assigned managed identity. When running locally, it can get a token using the logged-in identity of Visual Studio, Visual Studio Code, Azure CLI, and Azure PowerShell.
 
+    Note that consecutive calls to DefaultAzureCredential.GetToken and [System.Data.SqlClient.SqlConnection.Open](/dotnet/api/system.data.sqlclient.sqlconnection) may use [SNAT port](/azure/load-balancer/load-balancer-outbound-connections) for each call.
+    This restriction occurs when using EntityFramework. The workaround is to use Entity Framework Core or to avoid calling GetToken and SqlConnection.Open as consecutive.
+    As a workaround, the following sample calls GetToken only when the Token expires.
+
+    ```csharp
+    private static Azure.Core.TokenRequestContext tokenContext;
+    private static DefaultAzureCredential credential;
+    private static Azure.Core.AccessToken token;
+    
+    static Constructor ()
+    {
+        credential = new Azure.Identity.DefaultAzureCredential();
+        tokenContext = new Azure.Core.TokenRequestContext(new[] { "https://database.windows.net/.default" });
+        token = credential.GetToken(tokenContext);
+    }
+
+    private static void CreateCommand(string queryString, string connectionString)
+    {
+        if (System.DateTime.UtcNow > token.ExpiresOn)
+        {
+            token = credential.GetToken(tokenContext);
+        }
+
+        using (SqlConnection connection = new SqlConnection(connectionString))
+        {
+            connection.AccessToken = token.Token;
+            SqlCommand command = new SqlCommand(queryString, connection);
+            command.Connection.Open();
+            command.ExecuteNonQuery();
+        }
+    }
+    ```
+
 1. In *Web.config*, find the connection string called `MyDbConnection` and replace its `connectionString` value with `"server=tcp:<server-name>.database.windows.net;database=<db-name>;"`. Replace _\<server-name>_ and _\<db-name>_ with your server name and database name. This connection string is used by the default constructor in *Models/MyDbContext.cs*.
     
     That's every thing you need to connect to SQL Database. When debugging in Visual Studio, your code uses the Azure AD user you configured in [2. Set up your dev environment](#2-set-up-your-dev-environment). You'll set up SQL Database later to allow connection from the managed identity of your App Service app.
